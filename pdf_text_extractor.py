@@ -1,5 +1,10 @@
 import json
 from pypdf import PdfReader
+import re
+
+def sanitize_filename(s):
+    # Replace any character that's not alphanumeric or underscore with an underscore
+    return re.sub(r'[^A-Za-z0-9_]', '_', s)
 
 def extract_single_chapter(reader, chapter_info):
     topic = chapter_info['topic']
@@ -21,7 +26,7 @@ def extract_selected_chapters(pdf_path, chapters_json, selected_chapter_keys):
     for chapter_key in selected_chapter_keys:
         chapter_info = chapters[chapter_key]
         output = extract_single_chapter(reader, chapter_info)
-        safe_topic = chapter_info['topic'].replace(' ', '_').replace('/', '_')
+        safe_topic = sanitize_filename(chapter_info['topic'])
         filename = f"{chapter_key}_{safe_topic}.txt"
         write_chapter_to_txt(output, filename)
 
@@ -115,6 +120,10 @@ chapters_json = '''
   }
 }
 '''
-selected_chapters = ["Chapter_5", "Chapter_7"]
+selected_chapters = ["Chapter_12"]
+
+# Get textbook name from db
+# Chapters json from pdf splitter
+# LLM select the chapters
 
 extract_selected_chapters("ComputerNetworking.pdf", chapters_json, selected_chapters)
