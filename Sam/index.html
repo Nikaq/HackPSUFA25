@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Course Helper</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet" />
+    <style>
+      :root { --sidebar-width: 320px; }
+      html, body { height: 100%; }
+      body { overflow: hidden; }
+      .app-shell { height: 100vh; }
+      .sidebar { width: var(--sidebar-width); }
+      .subject-item { cursor: pointer; }
+      .subject-item.active { background: rgba(13,110,253,.08); border-color: rgba(13,110,253,.2); }
+      .chat-pane { min-width: 0; }
+      .chat-header { border-bottom: 1px solid rgba(0,0,0,.075); }
+      .chat-history { overflow: auto; }
+      .bubble { display:inline-block; max-width:min(70ch,85%); padding:.65rem .85rem; border-radius:1rem; white-space:pre-wrap; overflow-wrap:break-word; }
+      .bubble.user { background:#0d6efd; color:#fff; border-bottom-right-radius:.35rem; }
+      .bubble.bot  { background:#f1f3f5; color:#212529; border-bottom-left-radius:.35rem; }
+      .msg-time { font-size:.75rem; opacity:.7; }
+      .composer textarea { resize:none; max-height:35vh; }
+      @media (max-width: 991.98px) { .sidebar { width: 100%; } }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell d-flex">
+      <!-- Sidebar (desktop) -->
+      <aside class="sidebar border-end d-none d-lg-flex flex-column bg-light">
+        <div class="p-3 d-flex align-items-center gap-2 border-bottom">
+          <i class="bi bi-book-half fs-4 text-primary"></i><strong>Subjects</strong>
+        </div>
+        <div class="p-3 pt-2">
+          <div class="input-group">
+            <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+            <input id="subjectSearch" type="search" class="form-control" placeholder="Search subjects..." />
+          </div>
+        </div>
+        <div id="subjectsList" class="list-group list-group-flush overflow-auto px-3 pb-3"></div>
+        <div class="mt-auto small text-center text-muted p-3 border-top">
+          <i class="bi bi-lightning-charge"></i> AI Course Helper
+        </div>
+      </aside>
+
+      <!-- Offcanvas Sidebar (mobile) -->
+      <div class="d-lg-none">
+        <button class="btn btn-light border m-2" data-bs-toggle="offcanvas" data-bs-target="#subjectsOffcanvas">
+          <i class="bi bi-list"></i> Subjects
+        </button>
+        <div class="offcanvas offcanvas-start" id="subjectsOffcanvas" tabindex="-1">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title">Subjects</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+          </div>
+          <div class="offcanvas-body d-flex flex-column">
+            <div class="mb-3">
+              <div class="input-group">
+                <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+                <input id="subjectSearchMobile" type="search" class="form-control" placeholder="Search subjects..." />
+              </div>
+            </div>
+            <div id="subjectsListMobile" class="list-group list-group-flush overflow-auto"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chat Pane -->
+      <main class="chat-pane flex-grow-1 d-flex flex-column">
+        <!-- header -->
+        <div class="chat-header d-flex align-items-center justify-content-between gap-2 p-3">
+          <div class="d-flex align-items-center gap-3">
+            <button class="btn btn-light border d-lg-none" data-bs-toggle="offcanvas" data-bs-target="#subjectsOffcanvas">
+              <i class="bi bi-list"></i>
+            </button>
+            <div>
+              <div class="fw-semibold" id="activeSubject">Choose a subject</div>
+              <div class="text-muted small" id="activeMeta">No conversation started</div>
+            </div>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <button id="newCourseBtn" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#newCourseModal"><i class="bi bi-stars"></i> New Course</button>
+            <button id="clearChatBtn" class="btn btn-outline-danger btn-sm" title="Clear chat"><i class="bi bi-trash3"></i></button>
+          </div>
+        </div>
+
+        <!-- history -->
+        <div id="chatHistory" class="chat-history flex-grow-1 p-3 bg-white"></div>
+
+        <!-- composer -->
+        <div class="composer border-top p-3 bg-white">
+          <form id="composerForm" class="d-flex flex-column gap-2" autocomplete="off">
+            <div class="d-flex gap-2">
+              <div class="btn-group" role="group" aria-label="Insert tools">
+                <button class="btn btn-light border" type="button" title="Attach"><i class="bi bi-paperclip"></i></button>
+                <button class="btn btn-light border" type="button" title="Add code"><i class="bi bi-code-slash"></i></button>
+              </div>
+              <div class="ms-auto small text-muted d-none d-md-block align-self-center">Press <kbd>Enter</kbd> to send • <kbd>Shift+Enter</kbd> for new line</div>
+            </div>
+            <div class="d-flex gap-2">
+              <textarea id="messageInput" class="form-control" rows="1" placeholder="Ask about the current subject..."></textarea>
+              <button class="btn btn-primary" type="submit" id="sendBtn" aria-label="Send message"><i class="bi bi-send-fill"></i></button>
+            </div>
+          </form>
+        </div>
+      </main>
+
+      <!-- New Course Modal -->
+      <div class="modal fade" id="newCourseModal" tabindex="-1" aria-labelledby="newCourseLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h1 class="modal-title fs-5" id="newCourseLabel">Add a New Course</h1>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+
+            <div class="modal-body">
+              <div class="row g-3">
+                <div class="col-md-8">
+                  <label class="form-label">Course Title</label>
+                  <input class="form-control" type="text" id="course-title" placeholder="e.g., CMPSC 443" />
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">ISBN (optional)</label>
+                  <input class="form-control" type="text" id="course-isbn" placeholder="e.g., 9781598295931" />
+                </div>
+
+                <div class="col-md-6">
+                  <label class="form-label">Course Syllabus (PDF/TXT)</label>
+                  <input class="form-control" type="file" id="course-syllabus-file" />
+                  <div class="form-text">Upload to auto-extract a contents list (preview only; not saved yet).</div>
+                </div>
+
+                <div class="col-md-6">
+                  <label class="form-label">Main Textbook (PDF/TXT)</label>
+                  <input class="form-control" type="file" id="course-textbook-file"/>
+                </div>
+
+                <div class="col-12">
+                  <div class="d-flex align-items-center gap-2">
+                    <h6 class="mb-0">Course Contents Preview (titles only)</h6>
+                    <span class="text-muted small">Auto-filled from syllabus, or add manually. These will be saved into <code>course_contents</code> when you click Save.</span>
+                  </div>
+                  <div class="border rounded p-2 mt-2" id="course-content-container">
+                    <span class="mx-auto d-block text-muted">Add chapter / module titles below</span>
+                    <!-- Dynamic rows will be added here -->
+                  </div>
+                  <div class="mt-2 d-flex justify-content-between">
+                    <button class="btn btn-outline-primary" id="addCourseContentBtn" type="button">
+                      <i class="bi bi-plus-circle"></i> Add Title
+                    </button>
+                    <button class="btn btn-outline-secondary btn-sm" id="clearContentsBtn" type="button">
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            <div class="modal-footer">
+              <div class="me-auto small text-muted" id="newCourseHint">
+                Tip: Upload a syllabus to auto-fill the contents preview.
+              </div>
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+              <button type="button" class="btn btn-primary" id="saveCourseBtn">Save Changes</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+      // ========= CONFIG =========
+      const API = "http://127.0.0.1:5001"; // Flask base
+
+      // ========= STATE =========
+      let SUBJECTS = []; // [{ id, name, isbn, source_url }]
+      let currentSubject = null;
+
+      // track uploaded urls and extracted/edited contents
+      let lastSyllabusUrl = "";
+      let lastTextbookUrl = "";
+
+      // ========= DOM =========
+      const subjectsList = document.getElementById("subjectsList");
+      const subjectsListMobile = document.getElementById("subjectsListMobile");
+      const subjectSearch = document.getElementById("subjectSearch");
+      const subjectSearchMobile = document.getElementById("subjectSearchMobile");
+      const activeSubject = document.getElementById("activeSubject");
+      const activeMeta = document.getElementById("activeMeta");
+      const chatHistory = document.getElementById("chatHistory");
+      const composerForm = document.getElementById("composerForm");
+      const messageInput = document.getElementById("messageInput");
+      const clearChatBtn = document.getElementById("clearChatBtn");
+
+      // Modal
+      const courseTitleInput = document.getElementById("course-title");
+      const courseIsbnInput  = document.getElementById("course-isbn");
+      const syllabusInput    = document.getElementById("course-syllabus-file");
+      const textbookInput    = document.getElementById("course-textbook-file");
+      const addCourseContentBtn = document.getElementById("addCourseContentBtn");
+      const clearContentsBtn    = document.getElementById("clearContentsBtn");
+      const courseContentContainer = document.getElementById("course-content-container");
+      const saveCourseBtn = document.getElementById("saveCourseBtn");
+      const newCourseHint = document.getElementById("newCourseHint");
+
+      // ========= SUBJECTS =========
+      async function fetchSubjects() {
+        const res = await fetch(`${API}/api/books/all`, { mode: "cors" });
+        const data = await res.json();
+        SUBJECTS = data.map(row => ({
+          id: String(row.id ?? ""),
+          name: row.name ?? "Untitled",
+          isbn: row.isbn ?? "",
+          source_url: row.source_url ?? "",
+        }));
+      }
+
+      function renderSubjects(listEl, filter = "") {
+        listEl.innerHTML = "";
+        SUBJECTS
+          .filter(s => s.name.toLowerCase().includes(filter.toLowerCase()))
+          .forEach(s => {
+            const a = document.createElement("a");
+            a.href = "#";
+            a.className = "list-group-item list-group-item-action subject-item py-2";
+            a.dataset.id = s.id;
+
+            a.innerHTML = `
+              <div class="d-flex justify-content-between align-items-center">
+                <span class="me-2 text-truncate">${s.name}</span>
+                <i class="bi bi-chevron-right text-muted ms-2"></i>
+              </div>
+              <div class="small text-muted text-truncate">${s.isbn ? "ISBN " + s.isbn : (s.source_url || "")}</div>
+            `;
+            a.addEventListener("click", (e) => {
+              e.preventDefault();
+              selectSubject(s.id);
+              const ocEl = document.getElementById("subjectsOffcanvas");
+              if (ocEl?.classList.contains("show")) {
+                bootstrap.Offcanvas.getInstance(ocEl)?.hide();
+              }
+            });
+            listEl.appendChild(a);
+          });
+      }
+
+      // ========= HISTORY (per course) =========
+      function currentBookId() {
+        return currentSubject ? Number(currentSubject.id) : 0; // uses hack_books.id
+      }
+
+      async function saveHistory(role, content) {
+        const book_id = currentBookId();
+        if (!book_id || !content) return;
+        try {
+          const res = await fetch(`${API}/api/history`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ book_id, role, content })
+          });
+          const json = await res.json();
+          if (!json.ok) throw new Error(json.error || "Failed to save history");
+        } catch (err) {
+          console.warn("saveHistory failed:", err.message);
+        }
+      }
+
+      async function loadHistory(book_id) {
+        try {
+          const res = await fetch(`${API}/api/history?book_id=${encodeURIComponent(book_id)}&limit=200`, { mode:"cors" });
+          const json = await res.json();
+          if (!json.ok) throw new Error(json.error || "Failed to load history");
+          return json.rows || [];
+        } catch (err) {
+          console.warn("loadHistory failed:", err.message);
+          return [];
+        }
+      }
+
+      // ========= SELECT SUBJECT =========
+      async function selectSubject(id) {
+        currentSubject = SUBJECTS.find(s => s.id === id) || null;
+        document.querySelectorAll(".subject-item").forEach(el => el.classList.remove("active"));
+        document.querySelectorAll(`.subject-item[data-id="${id}"]`).forEach(el => el.classList.add("active"));
+
+        if (!currentSubject) {
+          activeSubject.textContent = "Choose a subject";
+          activeMeta.textContent = "No conversation started";
+          chatHistory.innerHTML = "";
+          return;
+        }
+
+        activeSubject.textContent = currentSubject.name;
+        activeMeta.textContent = currentSubject.isbn ? `ISBN ${currentSubject.isbn}` : currentSubject.source_url;
+
+        chatHistory.innerHTML = "";
+        const rows = await loadHistory(currentBookId());
+        if (rows.length) {
+          for (const r of rows) {
+            const role = (r.role || "user").toLowerCase() === "bot" ? "bot" : "user";
+            appendMessage(role, r.content || "");
+          }
+        } else {
+          appendMessage("bot", `Selected: ${currentSubject.name}. Ask me anything about it.`);
+        }
+        scrollToBottom();
+      }
+
+      // ========= CHAT =========
+      composerForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const text = messageInput.value.trim();
+        if (!text) return;
+        appendMessage("user", text);
+        messageInput.value = "";
+        messageInput.style.height = "auto";
+        messageInput.style.height = messageInput.scrollHeight + "px";
+        scrollToBottom();
+
+        // Save USER message
+        await saveHistory("user", text);
+
+        // Mock assistant reply (replace with your model call)
+        const reply = currentSubject ? `Let's talk about ${currentSubject.name}.` : `Let's pick a subject first.`;
+        setTimeout(async () => {
+          appendMessage("bot", reply);
+          scrollToBottom();
+          // Save BOT message
+          await saveHistory("bot", reply);
+        }, 250);
+      });
+
+      function appendMessage(role, text) {
+        const row = document.createElement("div");
+        row.className = `d-flex mb-3 ${role === "user" ? "justify-content-end" : "justify-content-start"}`;
+        const bubble = document.createElement("div");
+        bubble.className = `bubble ${role}`;
+        bubble.innerText = text;
+        const time = document.createElement("div");
+        time.className = "msg-time mt-1 text-end";
+        time.innerText = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+        const wrap = document.createElement("div");
+        wrap.className = role === "user" ? "text-end" : "text-start";
+        wrap.appendChild(bubble);
+        wrap.appendChild(time);
+
+        row.appendChild(wrap);
+        chatHistory.appendChild(row);
+      }
+      function scrollToBottom() { chatHistory.scrollTop = chatHistory.scrollHeight; }
+      clearChatBtn.addEventListener("click", () => { chatHistory.innerHTML = ""; });
+
+      // ========= CONTENTS PREVIEW =========
+      function addCourseContentRow(title = "") {
+        const row = document.createElement("div");
+        row.className = "input-group mb-2";
+
+        const indexBadge = document.createElement("span");
+        indexBadge.className = "input-group-text";
+        indexBadge.textContent = (courseContentContainer.querySelectorAll(".input-group").length + 1).toString();
+
+        const inputTitle = document.createElement("input");
+        inputTitle.className = "form-control";
+        inputTitle.placeholder = "Chapter / Module title";
+        inputTitle.value = title;
+
+        const delBtnWrap = document.createElement("span");
+        delBtnWrap.className = "input-group-text p-0";
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "btn btn-outline-danger";
+        delBtn.innerHTML = '<i class="bi bi-x"></i>';
+        delBtn.onclick = () => row.remove();
+        delBtnWrap.appendChild(delBtn);
+
+        row.appendChild(indexBadge);
+        row.appendChild(inputTitle);
+        row.appendChild(delBtnWrap);
+
+        courseContentContainer.appendChild(row);
+      }
+
+      function renderCourseContents(titles) {
+        // Remove everything except the first hint <span>
+        [...courseContentContainer.children].forEach((child, idx) => {
+          if (idx > 0) courseContentContainer.removeChild(child);
+        });
+        if (!titles || titles.length === 0) {
+          addCourseContentRow("");
+          return;
+        }
+        titles.forEach(t => addCourseContentRow(t));
+      }
+
+      function collectCourseContents() {
+        const rows = [...courseContentContainer.querySelectorAll(".input-group")];
+        return rows.map(r => (r.querySelector("input")?.value || "").trim()).filter(Boolean);
+      }
+
+      document.getElementById("addCourseContentBtn").addEventListener("click", () => addCourseContentRow());
+      document.getElementById("clearContentsBtn").addEventListener("click", () => renderCourseContents([]));
+
+      // ========= Uploads & AI extraction =========
+      async function uploadFile(kind, file) {
+        const form = new FormData();
+        form.append("kind", kind);
+        form.append("file", file);
+        const res = await fetch(`${API}/api/upload`, { method: "POST", body: form });
+        const json = await res.json();
+        if (!json.ok) throw new Error(json.error || "Upload failed");
+        return json.url; // "/uploads/..."
+      }
+
+      async function extractContentsFromSyllabus(syllabusUrl) {
+        const res = await fetch(`${API}/api/contents/extract`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ syllabus_url: syllabusUrl })
+        });
+        const json = await res.json();
+        if (!json.ok) throw new Error(json.error || "Extraction failed");
+        return json.contents || [];
+      }
+
+      syllabusInput.addEventListener("change", async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+          lastSyllabusUrl = await uploadFile("syllabus", file);
+          const titles = await extractContentsFromSyllabus(lastSyllabusUrl);
+          renderCourseContents(titles);
+          newCourseHint.textContent = "Syllabus uploaded. Contents extracted — review/edit below (saved on Save Changes).";
+        } catch (err) {
+          console.error("Syllabus extraction failed:", err);
+          alert("Couldn't extract contents. Add titles manually.");
+          renderCourseContents([]);
+        }
+      });
+
+      textbookInput.addEventListener("change", async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+          lastTextbookUrl = await uploadFile("textbook", file);
+          newCourseHint.textContent = "Textbook uploaded.";
+        } catch (err) {
+          console.error("Textbook upload failed:", err);
+          alert("Textbook upload failed.");
+        }
+      });
+
+      // ========= Save Changes -> INSERT NEW COURSE =========
+      async function createCourse({ title, isbn, textbook_url, syllabus_url, contents }) {
+        const res = await fetch(`${API}/api/courses/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title, isbn, textbook_url, syllabus_url, contents })
+        });
+        return res.json();
+      }
+
+      document.getElementById("saveCourseBtn").addEventListener("click", async () => {
+        const title = courseTitleInput.value.trim();
+        const isbn  = courseIsbnInput.value.trim();
+        if (!title) { alert("Please enter a course title."); return; }
+
+        const contents = collectCourseContents(); // will be saved to course_contents
+        try {
+          const resp = await createCourse({
+            title,
+            isbn,
+            textbook_url: lastTextbookUrl,
+            syllabus_url: lastSyllabusUrl,
+            contents
+          });
+          if (!resp.ok) {
+            alert(resp.error || "Failed to save course.");
+            return;
+          }
+
+          // Refresh subjects list, close modal
+          await fetchSubjects();
+          renderSubjects(subjectsList);
+          renderSubjects(subjectsListMobile);
+          const modal = bootstrap.Modal.getInstance(document.getElementById("newCourseModal"));
+          modal?.hide();
+        } catch (err) {
+          console.error(err);
+          alert("Failed to save course.");
+        }
+      });
+
+      // ========= Search + init =========
+      subjectSearch.addEventListener("input", () => renderSubjects(subjectsList, subjectSearch.value));
+      subjectSearchMobile.addEventListener("input", () => renderSubjects(subjectsListMobile, subjectSearchMobile.value));
+      messageInput.addEventListener("input", () => {
+        messageInput.style.height = "auto";
+        messageInput.style.height = messageInput.scrollHeight + "px";
+      });
+
+      (async function init() {
+        try { await fetchSubjects(); } catch (e) { console.error("Failed to load subjects:", e); }
+        renderSubjects(subjectsList);
+        renderSubjects(subjectsListMobile);
+        if (SUBJECTS.length) { selectSubject(SUBJECTS[0].id); } else {
+          chatHistory.innerHTML = "";
+          appendMessage("bot", "Hi! Add a new course to get started.");
+        }
+        messageInput.style.height = "auto";
+        messageInput.style.height = messageInput.scrollHeight + "px";
+      })();
+    </script>
+  </body>
+</html>
