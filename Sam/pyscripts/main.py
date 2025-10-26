@@ -86,6 +86,8 @@ def read_pdf_text(pdf_path: Path, max_chars: int = 60000) -> str:
                 parts.append(t)
             if sum(len(x) for x in parts) > max_chars:
                 break
+    print(pdf_path)
+    os.remove(pdf_path)
     return "\n\n".join(parts)[:max_chars]
 
 def normalize_titles_list(items):
@@ -297,6 +299,7 @@ def _collect_extracted_texts(selected: Dict[str, Dict[str, Any]]) -> str:
         if p.exists():
             try:
                 parts.append(p.read_text(encoding="utf-8", errors="ignore"))
+                os.remove(p)
             except Exception:
                 continue
     return "\n\n".join(parts).strip()

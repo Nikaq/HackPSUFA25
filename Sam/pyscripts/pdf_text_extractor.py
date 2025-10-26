@@ -29,6 +29,7 @@ def extract_selected_chapters(pdf_path, chapters_json, selected_chapter_keys):
         output = extract_single_chapter(reader, chapter_info)
         safe_topic = sanitize_filename(chapter_info['topic'])
         filename = f"{chapter_key}_{safe_topic}.txt"
+        write_chapter_to_txt(output, filename)
 
 # Example usage:
 chapters_json = '''
