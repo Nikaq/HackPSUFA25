@@ -32,7 +32,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 
 DB_DSN = os.getenv(
     "DATABASE_URL",
-    "postgresql://avnadmin:AVNS_jsTSmdD8sgf0CoR9UaW@pg-27f0ba51-syamsulbakhri-27a8.g.aivencloud.com:16774/defaultdb?sslmode=require",
+    "",
 )
 pool = ConnectionPool(conninfo=DB_DSN, min_size=1, max_size=5, timeout=10)
 
