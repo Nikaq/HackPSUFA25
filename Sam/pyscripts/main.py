@@ -44,7 +44,7 @@ DB_DSN = os.getenv(
 pool = ConnectionPool(conninfo=DB_DSN, min_size=1, max_size=5, timeout=10)
 
 # OpenAI
-OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "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").strip()
+OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "API_KEY_HERE").strip()
 OPENAI_OK = bool(OPENAI_API_KEY)
 OPENAI_MODEL_NEW = os.getenv("OPENAI_CHAT_MODEL", "gpt-4.1-mini")            # used for QA answers
 OPENAI_JSON_MODEL = os.getenv("OPENAI_JSON_MODEL", "gpt-4o-mini-2024-07-18") # used for JSON extraction

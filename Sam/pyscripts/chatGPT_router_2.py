@@ -167,7 +167,7 @@ if __name__ == "__main__":
         question="How does TCP handle congestion control?",
         chapters_list=chapters_list,
         top_k=2,
-        api_key="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",
+        api_key="API_KEY_HERE",
         model="gpt-4o-2024-08-06"
     )
 
