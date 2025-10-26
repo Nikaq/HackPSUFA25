@@ -167,7 +167,7 @@ if __name__ == "__main__":
         question="How does TCP handle congestion control?",
         chapters_list=chapters_list,
         top_k=2,
-        api_key="API_KEY_HERE",
+        api_key="xxxxxxxxxxxxxxx",
         model="gpt-4o-2024-08-06"
     )
 
