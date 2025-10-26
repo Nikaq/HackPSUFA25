@@ -1,10 +1,14 @@
 import os
+import sys
 import uuid
 import json
 import re
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+# Ensure we can import chatGPT_router2.py if it's alongside this file
+sys.path.append(str(Path(__file__).parent))
 
 # ---- your extractor for selected chapters (writes .txt files) ----
 from pdf_text_extractor import extract_selected_chapters
@@ -23,6 +27,9 @@ from pypdf import PdfReader
 # ---- OpenAI ----
 from openai import OpenAI
 
+# ---- Router imported from chatGPT_router2.py ----
+from chatGPT_router_2 import route_chapters
+
 # ================================================================
 #                       CONFIG / GLOBALS
 # ================================================================
@@ -37,7 +44,7 @@ DB_DSN = os.getenv(
 pool = ConnectionPool(conninfo=DB_DSN, min_size=1, max_size=5, timeout=10)
 
 # OpenAI
-OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "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").strip()
+OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "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").strip()
 OPENAI_OK = bool(OPENAI_API_KEY)
 OPENAI_MODEL_NEW = os.getenv("OPENAI_CHAT_MODEL", "gpt-4.1-mini")            # used for QA answers
 OPENAI_JSON_MODEL = os.getenv("OPENAI_JSON_MODEL", "gpt-4o-mini-2024-07-18") # used for JSON extraction
@@ -190,81 +197,6 @@ def ai_extract_contents_as_titles(text: str) -> list[str]:
         merged = _normalize_titles_list(lines[:30])
 
     return merged
-
-# ================================================================
-#                      CHAPTER ROUTER (OpenAI)
-#   Input: [{"key":"Chapter_1","topic":"...","start":1,"end":31}, ...]
-#   Output: {"Chapter_1":{"topic":"...","start":1,"end":31}, ...}
-# ================================================================
-_ROUTE_SYS = (
-    "You route student questions to relevant textbook chapters.\n"
-    "You are given a chapters JSON mapping of Chapter_* -> {topic,start,end} "
-    "and a student question. Return ONLY a JSON object that is a subset of "
-    "the mapping with the most relevant chapters. Do NOT invent chapters or "
-    "change fields. Output JSON only."
-)
-
-def _allowed_keys_prompt(keys: List[str]) -> str:
-    return "Only use these chapter keys (if relevant): " + ", ".join(keys) + "."
-
-def route_chapters(
-    question: str,
-    chapters_list: List[Dict[str, Any]],
-    *,
-    top_k: int = 3,
-    model: str = "gpt-4o-mini-2024-07-18",
-) -> Dict[str, Dict[str, Any]]:
-    if not OPENAI_OK or not client:
-        return {}
-
-    # Normalize list -> mapping
-    chapters_map: Dict[str, Dict[str, Any]] = {}
-    for i, item in enumerate(chapters_list):
-        if not isinstance(item, dict):
-            continue
-        key = item.get("key") or f"Chapter_{i+1}"
-        value = {k: v for k, v in item.items() if k != "key"}
-        chapters_map[key] = value
-    if not chapters_map:
-        return {}
-
-    allowlist = _allowed_keys_prompt(list(chapters_map.keys()))
-    user_prompt = f"""
-Question: {question}
-
-You may return up to {top_k} chapters. If nothing clearly fits, return an empty object {{}}.
-{allowlist}
-
-Chapters JSON (copy matching entries EXACTLY as-is; do not alter values):
-{json.dumps(chapters_map, ensure_ascii=False)}
-""".strip()
-
-    try:
-        resp = client.chat.completions.create(
-            model=model,
-            response_format={"type": "json_object"},
-            temperature=0,
-            messages=[
-                {"role": "system", "content": _ROUTE_SYS},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-        content = resp.choices[0].message.content or "{}"
-        data = json.loads(content)
-        if not isinstance(data, dict):
-            return {}
-        # Keep only allowed keys; overwrite with originals (guard against drift)
-        filtered: Dict[str, Dict[str, Any]] = {}
-        for k in data.keys():
-            if k in chapters_map:
-                filtered[k] = chapters_map[k]
-        # Truncate to top_k
-        if len(filtered) > top_k:
-            filtered = {k: filtered[k] for k in list(filtered.keys())[:top_k]}
-        return filtered
-    except Exception:
-        traceback.print_exc()
-        return {}
 
 # ================================================================
 #                   PAGE & PATH HELPERS
@@ -681,11 +613,13 @@ def add_history():
                     if ch and ch.get("start") is not None and ch.get("end") is not None
                 ]
 
-                # 1) Route to the most relevant chapters
+                # 1) Route to the most relevant chapters using chatGPT_router2.py
                 routed = route_chapters(
                     question=content,
                     chapters_list=chapters_list_for_router,
-                    top_k=3
+                    top_k=3,
+                    api_key=OPENAI_API_KEY,
+                    model="gpt-4o-2024-08-06"
                 )  # dict of {Chapter_X: {topic,start,end}}
                 print(chapters_json_list)
                 print(routed)
