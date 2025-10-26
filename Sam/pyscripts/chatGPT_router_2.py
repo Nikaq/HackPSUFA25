@@ -40,8 +40,11 @@ pool = ConnectionPool(conninfo=DB_DSN, min_size=1, max_size=5, timeout=10)
 OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "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").strip()
 OPENAI_OK = bool(OPENAI_API_KEY)
 OPENAI_MODEL_NEW = os.getenv("OPENAI_CHAT_MODEL", "gpt-4.1-mini")            # used for QA answers
-OPENAI_JSON_MODEL = os.getenv("OPENAI_JSON_MODEL", "gpt-4o-mini-2024-07-18") # used for JSON extraction
+OPENAI_JSON_MODEL = os.getenv("OPENAI_JSON_MODEL", "gpt-4o-mini-2024-07-18") # used for JSON extraction + weighting
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_OK else None
+
+# How much total progress (%) to distribute per successful bot reply
+PROGRESS_INCREMENT = float(os.getenv("PROGRESS_INCREMENT", "10"))
 
 app = Flask(__name__)
 CORS(
@@ -382,7 +385,7 @@ Textbook Content:
         return ""
 
 # ================================================================
-#        PROGRESS HELPERS (keyword overlap + basic proportional math)
+#        PROGRESS HELPERS (LLM-based content weighting)
 # ================================================================
 _STOPWORDS = {
     "the","a","an","and","or","of","to","for","in","on","at","by","with","from",
@@ -400,46 +403,80 @@ def _keywords(text: str) -> set[str]:
     toks = _WORD_RE.findall(text.lower())
     return {t for t in toks if t not in _STOPWORDS and len(t) >= 2}
 
-def _allocate_and_update_progress(
+def _list_contents_for_prompt(contents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out = []
+    for i, item in enumerate(contents):
+        title = (item.get("Content") or "").strip()
+        prog = float(item.get("progress", 0) or 0.0)
+        out.append({"index": i, "title": title, "progress": prog})
+    return out
+
+def _llm_weights_for_contents(question: str, contents: List[Dict[str, Any]], model: str | None = None) -> List[float]:
+    """
+    Ask the LLM to assign non-negative weights to each content item based on
+    how relevant it is to the user's question. Returns a list of floats that sum to 1.0.
+    Unrelated items should get weight 0.
+    """
+    if not OPENAI_OK or not client or not contents:
+        return []
+
+    model = model or OPENAI_JSON_MODEL
+    items = _list_contents_for_prompt(contents)
+
+    sys = (
+        "You are assigning relevance weights to course content titles. "
+        "Return JSON ONLY. Weights must be non-negative and sum to 1. "
+        "Give weight 0 to unrelated items. Do not invent items."
+    )
+    user = {
+        "question": question,
+        "items": items,
+        "instructions": (
+            "Distribute weights across items most helpful to answer the question. "
+            "If multiple items are equally relevant, split weights between them. "
+            "Irrelevant items must have weight 0."
+        )
+    }
+
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            response_format={"type": "json_object"},
+            temperature=0,
+            messages=[
+                {"role": "system", "content": sys},
+                {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
+            ],
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        data = json.loads(raw)
+        weights = data.get("weights", [])
+        # Basic validation
+        if not isinstance(weights, list) or len(weights) != len(items):
+            return []
+        weights = [max(0.0, float(w)) for w in weights]
+        s = sum(weights)
+        if s <= 0:
+            return []
+        return [w / s for w in weights]
+    except Exception:
+        traceback.print_exc()
+        return []
+
+def _allocate_and_update_progress_llm(
     cur,
     *,
     book_id: int,
     question: str,
-    routed: Dict[str, Dict[str, Any]],
-    chapters_json_list: List[Dict[str, Any]],
 ) -> None:
     """
-    Update hack_books.course_contents using only basic math:
-
-    1) covered_percent = sum of chapter 'percent' for the chapters we just taught.
-    2) Build a keyword signal from selected chapter topics + the user's question.
-    3) Score each course content title by keyword overlap with the signal.
-    4) Distribute 'covered_percent' proportionally to titles with score > 0.
-    5) Cap each 'progress' at 100 and round to 2 decimals.
-
-    Only runs if there *was* a bot reply (caller ensures this).
+    Content-only progress (no chapters):
+    1) Get course_contents for the book.
+    2) Ask LLM to assign weights to each item given the question.
+       - If LLM unavailable/returns nothing, fallback to keyword overlap.
+    3) Distribute PROGRESS_INCREMENT by these weights.
+    4) Cap each progress at 100, round to 2 decimals, persist.
     """
-    if not routed:
-        return
-
-    selected_keys = list(routed.keys())
-    if not selected_keys:
-        return
-
-    # Map chapter key -> percent
-    percent_map: Dict[str, float] = {}
-    for ch in chapters_json_list or []:
-        k = ch.get("chapter")
-        if k:
-            try:
-                percent_map[k] = float(ch.get("percent", 0) or 0.0)
-            except Exception:
-                percent_map[k] = 0.0
-
-    covered_percent = sum(percent_map.get(k, 0.0) for k in selected_keys)
-    if covered_percent <= 0:
-        return
-
     # Load current contents
     cur.execute("SELECT course_contents FROM hack_books WHERE id = %s", (int(book_id),))
     row = cur.fetchone()
@@ -447,35 +484,36 @@ def _allocate_and_update_progress(
     if not contents:
         return
 
-    # Build the keyword signal from selected chapter topics + the question
-    chap_topics = " ".join([routed[k].get("topic", "") for k in selected_keys if k in routed])
-    signal = _keywords(chap_topics) | _keywords(question)
+    # Try LLM weights
+    weights = _llm_weights_for_contents(question, contents)
 
-    # Score each content item
-    scores: List[int] = []
-    for item in contents:
-        title = (item.get("Content") or "").strip()
-        score = len(_keywords(title) & signal)
-        scores.append(score)
+    # Fallback: keyword overlap proportional weights
+    if not weights:
+        signal = _keywords(question)
+        scores: List[int] = []
+        for item in contents:
+            title = (item.get("Content") or "").strip()
+            sc = len(_keywords(title) & signal)
+            scores.append(sc)
+        total = sum(scores)
+        if total > 0:
+            weights = [sc / total for sc in scores]
+        else:
+            # If absolutely nothing matches, skip updating to avoid miscrediting unrelated content
+            return
 
-    total_score = sum(scores)
-    if total_score <= 0:
-        # Nothing matched; skip updating to avoid miscrediting unrelated content
-        return
-
-    # Distribute covered_percent proportionally by score
+    # Distribute increment
+    inc = float(PROGRESS_INCREMENT)
     for i, item in enumerate(contents):
-        sc = scores[i]
-        if sc <= 0:
-            continue
-        add = covered_percent * (sc / total_score)
+        w = float(weights[i]) if i < len(weights) else 0.0
+        add = inc * w
         try:
             current = float(item.get("progress", 0) or 0.0)
         except Exception:
             current = 0.0
         item["progress"] = round(min(100.0, current + add), 2)
 
-    # Write back
+    # Persist
     cur.execute(
         "UPDATE hack_books SET course_contents = %s WHERE id = %s",
         (Json(contents), int(book_id))
@@ -577,7 +615,7 @@ def create_course():
     content_objs = _to_content_objs(contents)
     source_url = textbook_url or syllabus_url or ""
 
-    # Build chapters_json (list) if textbook exists
+    # Build chapters_json (list) if textbook exists (used for answering, not progress)
     chapters_list = []
     abs_pdf = _resolve_pdf_path(source_url)
     if abs_pdf and abs_pdf.exists() and abs_pdf.suffix.lower() == ".pdf":
@@ -647,12 +685,12 @@ def add_history():
 
         # Only auto-reply when a user sends a message
         bot_msg = None
-        routed = {}  # keep routed visible after answering
+        routed = {}  # kept for debug/answering
         chapters_json_list = []
         source_url = ""
 
         if role == "user":
-            # Load chapters_json + source_url
+            # Load chapters_json + source_url (used for ANSWER building only)
             cur.execute(
                 "SELECT chapters_json, source_url FROM hack_books WHERE id = %s",
                 (int(book_id),)
@@ -662,7 +700,7 @@ def add_history():
                 chapters_json_list = row.get("chapters_json") or []
                 source_url = row.get("source_url") or ""
 
-            # If caller provided manual content, use it
+            # If caller provided manual content, use it directly.
             if manual_textbook_content:
                 textbook_content = manual_textbook_content
             else:
@@ -678,7 +716,7 @@ def add_history():
                     if ch and ch.get("start") is not None and ch.get("end") is not None
                 ]
 
-                # 1) Route to the most relevant chapters
+                # 1) Route to the most relevant chapters (for answer context only)
                 routed = route_chapters(
                     question=content,
                     chapters_list=chapters_list_for_router,
@@ -696,6 +734,8 @@ def add_history():
                         "start": int(ch.get("start", 0)),  # already 0-based from save()
                         "end": int(ch.get("end", 0)),
                     }
+                    
+                print(routed.keys())
                 chapters_json_str = json.dumps(chapters_map_for_extractor, ensure_ascii=False)
 
                 # 3) Build selected chapter keys (order as in 'routed')
@@ -703,7 +743,6 @@ def add_history():
 
                 # 4) Resolve PDF and call your extractor (writes .txt files),
                 #    then read those files back
-                extracted = ""
                 pdf_path = _resolve_pdf_path(source_url)
                 if pdf_path and pdf_path.exists() and selected_keys:
                     try:
@@ -733,14 +772,12 @@ def add_history():
                 saved_bot = cur.fetchone()
                 bot_msg = saved_bot  # contains DB-generated unique id
 
-                # >>> ONLY update progress when the LLM responded <<<
+                # >>> Progress update now uses LLM content weighting (NO chapters) <<<
                 try:
-                    _allocate_and_update_progress(
+                    _allocate_and_update_progress_llm(
                         cur,
                         book_id=int(book_id),
                         question=content,
-                        routed=routed,
-                        chapters_json_list=chapters_json_list
                     )
                 except Exception:
                     traceback.print_exc()
