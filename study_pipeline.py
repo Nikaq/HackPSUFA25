@@ -38,7 +38,8 @@ def build_chapters_json(pdf_path: Path, out_json: Path, one_index: bool = False,
     return result
 
 def choose_chapters(question: str, chapters_map: dict, top_k: int = 3, model: str | None = None) -> dict:
-    router = ChatGPTLiteralRouter(api_key=None if False else "xxxxxxxxx",  # not used if the class has a key embedded
+    # --------------------------------------------------API KEY HERE↓↓↓--------------------------------------------------
+    router = ChatGPTLiteralRouter(api_key=None if False else "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",  # not used if the class has a key embedded
                                   model=model or "gpt-4o-mini-2024-07-18")
     return router.route(
         question=question,

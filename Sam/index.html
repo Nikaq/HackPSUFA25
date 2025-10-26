@@ -14,14 +14,29 @@
       .sidebar { width: var(--sidebar-width); }
       .subject-item { cursor: pointer; }
       .subject-item.active { background: rgba(13,110,253,.08); border-color: rgba(13,110,253,.2); }
+      .subject-header:hover { background: rgba(0,0,0,.03); }
       .chat-pane { min-width: 0; }
       .chat-header { border-bottom: 1px solid rgba(0,0,0,.075); }
       .chat-history { overflow: auto; }
       .bubble { display:inline-block; max-width:min(70ch,85%); padding:.65rem .85rem; border-radius:1rem; white-space:pre-wrap; overflow-wrap:break-word; }
       .bubble.user { background:#0d6efd; color:#fff; border-bottom-right-radius:.35rem; }
       .bubble.bot  { background:#f1f3f5; color:#212529; border-bottom-left-radius:.35rem; }
+      .bubble.pending { opacity:.8; }
       .msg-time { font-size:.75rem; opacity:.7; }
       .composer textarea { resize:none; max-height:35vh; }
+
+      .content-list { max-height: 180px; overflow: auto; }
+      .progress-xs { height: .5rem; }
+      .progress-sm { height: .65rem; }
+      .meta-line { font-size:.8rem; }
+      .btn-under { width: 100%; text-align: left; }
+
+      /* Make any text inside progress bars black (safeguard) */
+      .progress .progress-bar { color: #000; }
+
+      /* Small label row above progress bars */
+      .progress-row { font-size: .85rem; }
+
       @media (max-width: 991.98px) { .sidebar { width: 100%; } }
     </style>
   </head>
@@ -86,7 +101,7 @@
         </div>
 
         <!-- history -->
-        <div id="chatHistory" class="chat-history flex-grow-1 p-3 bg-white"></div>
+        <div id="chatHistory" class="chat-history flex-grow-1 p-3 bg-white" aria-live="polite" aria-busy="false"></div>
 
         <!-- composer -->
         <div class="composer border-top p-3 bg-white">
@@ -100,7 +115,11 @@
             </div>
             <div class="d-flex gap-2">
               <textarea id="messageInput" class="form-control" rows="1" placeholder="Ask about the current subject..."></textarea>
-              <button class="btn btn-primary" type="submit" id="sendBtn" aria-label="Send message"><i class="bi bi-send-fill"></i></button>
+              <button class="btn btn-primary d-inline-flex align-items-center gap-2" type="submit" id="sendBtn" aria-label="Send message">
+                <i class="bi bi-send-fill" id="sendIcon"></i>
+                <span id="sendSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                <span class="d-none d-md-inline">Send</span>
+              </button>
             </div>
           </form>
         </div>
@@ -144,7 +163,6 @@
                   </div>
                   <div class="border rounded p-2 mt-2" id="course-content-container">
                     <span class="mx-auto d-block text-muted">Add chapter / module titles below</span>
-                    <!-- Dynamic rows will be added here -->
                   </div>
                   <div class="mt-2 d-flex justify-content-between">
                     <button class="btn btn-outline-primary" id="addCourseContentBtn" type="button">
@@ -178,10 +196,9 @@
       const API = "http://127.0.0.1:5001"; // Flask base
 
       // ========= STATE =========
-      let SUBJECTS = []; // [{ id, name, isbn, source_url }]
+      let SUBJECTS = []; // [{ id, name, isbn, source_url, course_contents: [...], _stats: {...} }]
       let currentSubject = null;
 
-      // track uploaded urls and extracted/edited contents
       let lastSyllabusUrl = "";
       let lastTextbookUrl = "";
 
@@ -196,8 +213,10 @@
       const composerForm = document.getElementById("composerForm");
       const messageInput = document.getElementById("messageInput");
       const clearChatBtn = document.getElementById("clearChatBtn");
+      const sendBtn = document.getElementById("sendBtn");
+      const sendIcon = document.getElementById("sendIcon");
+      const sendSpinner = document.getElementById("sendSpinner");
 
-      // Modal
       const courseTitleInput = document.getElementById("course-title");
       const courseIsbnInput  = document.getElementById("course-isbn");
       const syllabusInput    = document.getElementById("course-syllabus-file");
@@ -212,62 +231,139 @@
       async function fetchSubjects() {
         const res = await fetch(`${API}/api/books/all`, { mode: "cors" });
         const data = await res.json();
-        SUBJECTS = data.map(row => ({
-          id: String(row.id ?? ""),
-          name: row.name ?? "Untitled",
-          isbn: row.isbn ?? "",
-          source_url: row.source_url ?? "",
-        }));
+        SUBJECTS = data.map(row => {
+          const cc = Array.isArray(row.course_contents) ? row.course_contents : [];
+          const stats = calcProgressStats(cc);
+          return {
+            id: String(row.id ?? ""),
+            name: row.name ?? "Untitled",
+            isbn: row.isbn ?? "",
+            source_url: row.source_url ?? "",
+            course_contents: cc,
+            _stats: stats
+          };
+        });
+      }
+
+      function calcProgressStats(contents = []) {
+        if (!contents.length) return { avg: 0, done: 0, total: 0 };
+        const vals = contents.map(c => Number(c.progress || 0));
+        const avg = vals.reduce((a,b)=>a+b,0) / vals.length;
+        const done = contents.filter(c => Number(c.progress || 0) >= 99.999).length;
+        return { avg: Math.round(avg * 100) / 100, done, total: contents.length };
       }
 
       function renderSubjects(listEl, filter = "") {
         listEl.innerHTML = "";
         SUBJECTS
           .filter(s => s.name.toLowerCase().includes(filter.toLowerCase()))
-          .forEach(s => {
-            const a = document.createElement("a");
-            a.href = "#";
-            a.className = "list-group-item list-group-item-action subject-item py-2";
-            a.dataset.id = s.id;
+          .forEach((s) => {
+            const collapseId = `contents-${listEl.id}-${s.id}`;
 
-            a.innerHTML = `
-              <div class="d-flex justify-content-between align-items-center">
-                <span class="me-2 text-truncate">${s.name}</span>
-                <i class="bi bi-chevron-right text-muted ms-2"></i>
-              </div>
-              <div class="small text-muted text-truncate">${s.isbn ? "ISBN " + s.isbn : (s.source_url || "")}</div>
-            `;
-            a.addEventListener("click", (e) => {
-              e.preventDefault();
+            const item = document.createElement("div");
+            item.className = "list-group-item subject-item p-0 mb-2 rounded border";
+
+            // Header (selects subject)
+            const header = document.createElement("div");
+            header.className = "subject-header p-2 px-3 d-flex align-items-start justify-content-between gap-2";
+            header.addEventListener("click", () => {
               selectSubject(s.id);
               const ocEl = document.getElementById("subjectsOffcanvas");
               if (ocEl?.classList.contains("show")) {
                 bootstrap.Offcanvas.getInstance(ocEl)?.hide();
               }
             });
-            listEl.appendChild(a);
+
+            const left = document.createElement("div");
+            left.className = "me-2 flex-grow-1 overflow-hidden";
+
+            // NEW: Overall progress label row with percentage on the LEFT, not inside the bar
+            left.innerHTML = `
+              <div class="fw-semibold text-truncate">${escapeHtml(s.name)}</div>
+              <div class="meta-line text-muted text-truncate">
+                ${s.isbn ? "ISBN " + escapeHtml(s.isbn) : (s.source_url ? escapeHtml(s.source_url) : "&nbsp;")}
+              </div>
+
+              <div class="mt-2">
+                <div class="d-flex justify-content-between align-items-center progress-row mb-1">
+                  <div class="text-muted">Overall progress</div>
+                  <div class="fw-semibold">${s._stats.avg}%</div>
+                </div>
+                <div class="progress progress-sm" role="progressbar" aria-label="Average progress"
+                     aria-valuenow="${s._stats.avg}" aria-valuemin="0" aria-valuemax="100">
+                  <div class="progress-bar" style="width:${s._stats.avg}%"></div>
+                </div>
+                <div class="small text-muted mt-1">${s._stats.done}/${s._stats.total} contents completed</div>
+              </div>
+            `;
+
+            // Down-arrow chevron to toggle
+            const chevron = document.createElement("button");
+            chevron.type = "button";
+            chevron.className = "btn btn-light btn-sm border align-self-start";
+            chevron.innerHTML = `<i class="bi bi-chevron-down"></i>`;
+            chevron.setAttribute("data-bs-toggle", "collapse");
+            chevron.setAttribute("data-bs-target", `#${collapseId}`);
+            chevron.addEventListener("click", (e) => e.stopPropagation());
+
+            header.appendChild(left);
+            header.appendChild(chevron);
+
+            // Under-header row with a full-width Contents button
+            const under = document.createElement("div");
+            under.className = "px-3 pb-2";
+            under.innerHTML = `
+              <button class="btn btn-light btn-sm border btn-under" type="button"
+                data-bs-toggle="collapse" data-bs-target="#${collapseId}">
+                <i class="bi bi-list-check me-1"></i> Contents
+              </button>
+            `;
+            under.querySelector("button").addEventListener("click", (e) => e.stopPropagation());
+
+            // Collapsible per-content list
+            const body = document.createElement("div");
+            body.className = "collapse";
+            body.id = collapseId;
+            const inner = document.createElement("div");
+            inner.className = "p-3 pt-2";
+            inner.innerHTML = s.course_contents && s.course_contents.length
+              ? renderContentProgressList(s.course_contents)
+              : `<div class="text-muted small">No contents for this course yet.</div>`;
+            body.appendChild(inner);
+
+            item.appendChild(header);
+            item.appendChild(under);
+            item.appendChild(body);
+            listEl.appendChild(item);
           });
+      }
+
+      function renderContentProgressList(contents) {
+        const rows = contents.map((c, i) => {
+          const title = escapeHtml(String(c.Content ?? c.title ?? `Item ${i+1}`));
+          const prog = Math.max(0, Math.min(100, Number(c.progress || 0)));
+          return `
+            <div class="mb-2">
+              <div class="d-flex justify-content-between gap-2">
+                <div class="text-truncate" title="${title}">${title}</div>
+                <div class="text-nowrap small text-muted">${prog}%</div>
+              </div>
+              <div class="progress progress-xs" role="progressbar" aria-valuenow="${prog}" aria-valuemin="0" aria-valuemax="100" title="${prog}%">
+                <div class="progress-bar" style="width:${prog}%"></div>
+              </div>
+            </div>
+          `;
+        }).join("");
+        return `<div class="content-list">${rows}</div>`;
+      }
+
+      function escapeHtml(s="") {
+        return s.replace(/[&<>"']/g, ch => ({'&':'&nbsp;&amp;'.slice(6),'<' :'&lt;','>' :'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
       }
 
       // ========= HISTORY (per course) =========
       function currentBookId() {
-        return currentSubject ? Number(currentSubject.id) : 0; // uses hack_books.id
-      }
-
-      async function saveHistory(role, content) {
-        const book_id = currentBookId();
-        if (!book_id || !content) return;
-        try {
-          const res = await fetch(`${API}/api/history`, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({ book_id, role, content })
-          });
-          const json = await res.json();
-          if (!json.ok) throw new Error(json.error || "Failed to save history");
-        } catch (err) {
-          console.warn("saveHistory failed:", err.message);
-        }
+        return currentSubject ? Number(currentSubject.id) : 0;
       }
 
       async function loadHistory(book_id) {
@@ -285,8 +381,15 @@
       // ========= SELECT SUBJECT =========
       async function selectSubject(id) {
         currentSubject = SUBJECTS.find(s => s.id === id) || null;
+
+        // update active styling
         document.querySelectorAll(".subject-item").forEach(el => el.classList.remove("active"));
-        document.querySelectorAll(`.subject-item[data-id="${id}"]`).forEach(el => el.classList.add("active"));
+        [...document.querySelectorAll(".subject-item")].forEach(el => {
+          if (el.querySelector(`[data-bs-target="#contents-subjectsList-${id}"]`) ||
+              el.querySelector(`[data-bs-target="#contents-subjectsListMobile-${id}"]`)) {
+            el.classList.add("active");
+          }
+        });
 
         if (!currentSubject) {
           activeSubject.textContent = "Choose a subject";
@@ -303,7 +406,7 @@
         if (rows.length) {
           for (const r of rows) {
             const role = (r.role || "user").toLowerCase() === "bot" ? "bot" : "user";
-            appendMessage(role, r.content || "");
+            appendMessage(role, r.content || "", r.timestamp);
           }
         } else {
           appendMessage("bot", `Selected: ${currentSubject.name}. Ask me anything about it.`);
@@ -316,26 +419,111 @@
         e.preventDefault();
         const text = messageInput.value.trim();
         if (!text) return;
+        if (!currentBookId()) { appendMessage("bot", "Please select a subject first."); return; }
+
         appendMessage("user", text);
         messageInput.value = "";
-        messageInput.style.height = "auto";
-        messageInput.style.height = messageInput.scrollHeight + "px";
+        autoResize(messageInput);
         scrollToBottom();
 
-        // Save USER message
-        await saveHistory("user", text);
+        // UI: show pending spinner and disable send
+        const pendingEl = showPendingBot();
+        setBusy(true);
 
-        // Mock assistant reply (replace with your model call)
-        const reply = currentSubject ? `Let's talk about ${currentSubject.name}.` : `Let's pick a subject first.`;
-        setTimeout(async () => {
-          appendMessage("bot", reply);
-          scrollToBottom();
-          // Save BOT message
-          await saveHistory("bot", reply);
-        }, 250);
+        try {
+          const res = await fetch(`${API}/api/history`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ book_id: currentBookId(), role: "user", content: text })
+          });
+          const json = await res.json();
+          if (!json.ok) throw new Error(json.error || "Failed to save or reply");
+
+          if (json.bot && json.bot.content) {
+            replacePendingWithBot(pendingEl, json.bot.content, json.bot.timestamp);
+            scrollToBottom();
+
+            // Refresh subjects to reflect progress updates
+            await fetchSubjects();
+            renderSubjects(subjectsList, subjectSearch.value);
+            renderSubjects(subjectsListMobile, subjectSearchMobile.value);
+          } else {
+            replacePendingWithError(pendingEl, "No reply received.");
+          }
+        } catch (err) {
+          console.error(err);
+          replacePendingWithError(pendingEl, "Sorry—something went wrong talking to the server.");
+        } finally {
+          setBusy(false);
+        }
       });
 
-      function appendMessage(role, text) {
+      function setBusy(isBusy) {
+        chatHistory.setAttribute("aria-busy", isBusy ? "true" : "false");
+        sendBtn.disabled = isBusy;
+        if (isBusy) {
+          sendIcon.classList.add("d-none");
+          sendSpinner.classList.remove("d-none");
+        } else {
+          sendIcon.classList.remove("d-none");
+          sendSpinner.classList.add("d-none");
+        }
+      }
+
+      function showPendingBot() {
+        const row = document.createElement("div");
+        row.className = "d-flex mb-3 justify-content-start";
+        const wrap = document.createElement("div");
+        wrap.className = "text-start";
+
+        const bubble = document.createElement("div");
+        bubble.className = "bubble bot pending d-flex align-items-center gap-2";
+        bubble.innerHTML = `
+          <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+          <span>Thinking…</span>
+        `;
+
+        const time = document.createElement("div");
+        time.className = "msg-time mt-1 text-start";
+        const when = new Date();
+        time.innerText = when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+        wrap.appendChild(bubble);
+        wrap.appendChild(time);
+        row.appendChild(wrap);
+        chatHistory.appendChild(row);
+        scrollToBottom();
+        return row; // we will replace this later
+      }
+
+      function replacePendingWithBot(pendingRow, text, ts) {
+        if (!pendingRow) { appendMessage("bot", text, ts); return; }
+        pendingRow.innerHTML = "";
+        const wrap = document.createElement("div");
+        wrap.className = "text-start";
+        const bubble = document.createElement("div");
+        bubble.className = "bubble bot";
+        bubble.innerText = text;
+        const time = document.createElement("div");
+        time.className = "msg-time mt-1 text-start";
+        const when = ts ? new Date(ts) : new Date();
+        time.innerText = when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        wrap.appendChild(bubble);
+        wrap.appendChild(time);
+        pendingRow.appendChild(wrap);
+      }
+
+      function replacePendingWithError(pendingRow, msg) {
+        if (!pendingRow) { appendMessage("bot", msg); return; }
+        pendingRow.querySelector(".bubble")?.classList.remove("pending");
+        pendingRow.querySelector(".bubble")?.classList.add("bot");
+        const bubble = pendingRow.querySelector(".bubble");
+        if (bubble) {
+          bubble.innerText = msg;
+        }
+      }
+
+      function appendMessage(role, text, ts) {
         const row = document.createElement("div");
         row.className = `d-flex mb-3 ${role === "user" ? "justify-content-end" : "justify-content-start"}`;
         const bubble = document.createElement("div");
@@ -343,7 +531,8 @@
         bubble.innerText = text;
         const time = document.createElement("div");
         time.className = "msg-time mt-1 text-end";
-        time.innerText = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const when = ts ? new Date(ts) : new Date();
+        time.innerText = when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
         const wrap = document.createElement("div");
         wrap.className = role === "user" ? "text-end" : "text-start";
@@ -353,10 +542,17 @@
         row.appendChild(wrap);
         chatHistory.appendChild(row);
       }
-      function scrollToBottom() { chatHistory.scrollTop = chatHistory.scrollHeight; }
-      clearChatBtn.addEventListener("click", () => { chatHistory.innerHTML = ""; });
 
-      // ========= CONTENTS PREVIEW =========
+      function scrollToBottom() { chatHistory.scrollTop = chatHistory.scrollHeight; }
+
+      function autoResize(el) {
+        el.style.height = "auto";
+        el.style.height = el.scrollHeight + "px";
+      }
+      clearChatBtn.addEventListener("click", () => { chatHistory.innerHTML = ""; });
+      messageInput.addEventListener("input", () => autoResize(messageInput));
+
+      // ========= CONTENTS PREVIEW (New Course Modal) =========
       function addCourseContentRow(title = "") {
         const row = document.createElement("div");
         row.className = "input-group mb-2";
@@ -387,14 +583,19 @@
       }
 
       function renderCourseContents(titles) {
-        // Remove everything except the first hint <span>
         [...courseContentContainer.children].forEach((child, idx) => {
           if (idx > 0) courseContentContainer.removeChild(child);
         });
         if (!titles || titles.length === 0) {
+          const hint = document.createElement("span");
+          hint.className = "mx-auto d-block text-muted";
+          hint.textContent = "Add chapter / module titles below";
+          courseContentContainer.innerHTML = "";
+          courseContentContainer.appendChild(hint);
           addCourseContentRow("");
           return;
         }
+        courseContentContainer.innerHTML = "";
         titles.forEach(t => addCourseContentRow(t));
       }
 
@@ -414,7 +615,7 @@
         const res = await fetch(`${API}/api/upload`, { method: "POST", body: form });
         const json = await res.json();
         if (!json.ok) throw new Error(json.error || "Upload failed");
-        return json.url; // "/uploads/..."
+        return json.url;
       }
 
       async function extractContentsFromSyllabus(syllabusUrl) {
@@ -470,7 +671,7 @@
         const isbn  = courseIsbnInput.value.trim();
         if (!title) { alert("Please enter a course title."); return; }
 
-        const contents = collectCourseContents(); // will be saved to course_contents
+        const contents = collectCourseContents();
         try {
           const resp = await createCourse({
             title,
@@ -484,10 +685,13 @@
             return;
           }
 
-          // Refresh subjects list, close modal
           await fetchSubjects();
-          renderSubjects(subjectsList);
-          renderSubjects(subjectsListMobile);
+          renderSubjects(subjectsList, subjectSearch.value);
+          renderSubjects(subjectsListMobile, subjectSearchMobile.value);
+
+          const newId = String(resp.course?.id ?? "");
+          if (newId) selectSubject(newId);
+
           const modal = bootstrap.Modal.getInstance(document.getElementById("newCourseModal"));
           modal?.hide();
         } catch (err) {
@@ -499,10 +703,6 @@
       // ========= Search + init =========
       subjectSearch.addEventListener("input", () => renderSubjects(subjectsList, subjectSearch.value));
       subjectSearchMobile.addEventListener("input", () => renderSubjects(subjectsListMobile, subjectSearchMobile.value));
-      messageInput.addEventListener("input", () => {
-        messageInput.style.height = "auto";
-        messageInput.style.height = messageInput.scrollHeight + "px";
-      });
 
       (async function init() {
         try { await fetchSubjects(); } catch (e) { console.error("Failed to load subjects:", e); }
@@ -512,8 +712,7 @@
           chatHistory.innerHTML = "";
           appendMessage("bot", "Hi! Add a new course to get started.");
         }
-        messageInput.style.height = "auto";
-        messageInput.style.height = messageInput.scrollHeight + "px";
+        autoResize(messageInput);
       })();
     </script>
   </body>

@@ -1,0 +1,10 @@
+page_index	confidence	number	raw_text	title	is_learning
+1	0.90		Digital Resources for Students	Digital Resources for Students	True
+32	0.90	1	Chapter 1: Computer Networks and the Internet	Computer Networks and the Internet	True
+112	0.90	2	Chapter 2: Application Layer	Application Layer	True
+212	0.90	3	Chapter 3: Transport Layer	Transport Layer	True
+334	0.90	4	Chapter 4: The Network Layer: Data Plane	The Network Layer: Data Plane	True
+408	0.90	5	Chapter 5: The Network Layer: Control Plane	The Network Layer: Control Plane	True
+480	0.90	6	Chapter 6: The Link Layer and LANs	The Link Layer and LANs	True
+562	0.90	7	Chapter 7: Wireless and Mobile Networks	Wireless and Mobile Networks	True
+638	0.90	8	Chapter 8: Security in Computer Networks	Security in Computer Networks	True

@@ -17,7 +17,7 @@ from openai import OpenAI
 
 # ---------------------------------------------------------------------
 # PASTE YOUR API KEY HERE ↓↓↓
-OPENAI_API_KEY = "xxxxxxx"
+OPENAI_API_KEY = "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"
 # ---------------------------------------------------------------------
 
 # Choose a model that supports JSON mode on Chat Completions:

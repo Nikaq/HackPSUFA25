@@ -120,10 +120,13 @@ chapters_json = '''
   }
 }
 '''
-selected_chapters = ["Chapter_12"]
 
-# Get textbook name from db
-# Chapters json from pdf splitter
-# LLM select the chapters
 
-extract_selected_chapters("ComputerNetworking.pdf", chapters_json, selected_chapters)
+if __name__ == "__main__":
+
+  selected_chapters = ["Chapter_12"]
+
+  # Get textbook name from db
+  # Chapters json from pdf splitter
+  # LLM select the chapters
+  extract_selected_chapters(r"C:\Users\datex\Documents\Hackathon - 2025\HackPSUFA25\Sam\books\ComputerNetworking.pdf", chapters_json, selected_chapters)
