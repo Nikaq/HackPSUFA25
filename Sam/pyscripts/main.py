@@ -684,6 +684,8 @@ def add_history():
                     chapters_list=chapters_list_for_router,
                     top_k=3
                 )  # dict of {Chapter_X: {topic,start,end}}
+                print(chapters_json_list)
+                print(routed)
 
                 # 2) Convert list (stored) -> dict mapping (what extractor expects)
                 chapters_map_for_extractor: Dict[str, Dict[str, Any]] = {}
